@@ -35,6 +35,7 @@ _user_context = {
     "timestamp": None,
     "session_id": None,
     "working_directory": None,
+    "thinking_process": "",  # Accumulate agent thinking steps
 }
 
 
@@ -148,6 +149,7 @@ def set_user_context(
         _user_context["current_prompt"] = user_prompt
         _user_context["timestamp"] = time.time()
         _user_context["session_id"] = session_id or str(int(time.time()))
+        _user_context["thinking_process"] = ""  # Reset thinking process for new context
 
         result = f"✅ User context set: {user_prompt[:100]}{'...' if len(user_prompt) > 100 else ''}"
         LOGGER.info(f"set_user_context result: {result}")
@@ -155,6 +157,41 @@ def set_user_context(
     except Exception as e:
         LOGGER.error(f"Error in set_user_context: {e}", exc_info=True)
         return f"❌ Error setting user context: {str(e)}"
+
+
+@mcp.tool()
+def add_thinking(content: str) -> str:
+    """
+    Add agent thinking step to current context.
+
+    **IMPORTANT: Use this tool to record your thinking process before making code changes:**
+    - When analyzing the problem
+    - When making strategic decisions
+    - When planning implementation steps
+    - When considering different approaches
+
+    Args:
+        content: The thinking step or decision-making process
+
+    Returns:
+        Confirmation message
+    """
+    try:
+        global _user_context
+        current_thinking = _user_context.get("thinking_process", "")
+
+        if current_thinking:
+            _user_context["thinking_process"] = f"{current_thinking} → {content}"
+        else:
+            _user_context["thinking_process"] = content
+
+        LOGGER.info(f"Added thinking step: {content[:100]}...")
+        return f"✅ Added thinking: {content[:100]}{'...' if len(content) > 100 else ''}"
+
+    except Exception as e:
+        # Robust: thinking failure should not break the main flow
+        LOGGER.warning(f"Failed to add thinking step: {e}")
+        return f"⚠️ Failed to add thinking (non-critical): {str(e)}"
 
 
 @mcp.tool()
@@ -209,8 +246,22 @@ def auto_mem_snap(files_changed: str = "", project_path: str = None) -> str:
             LOGGER.warning(result)
             return result
 
-        prompt = _user_context["current_prompt"]
-        LOGGER.info(f"Using prompt: {prompt}")
+        # Build enhanced prompt with thinking process
+        base_prompt = _user_context["current_prompt"]
+        thinking = _user_context.get("thinking_process", "")
+
+        if thinking:
+            prompt = f"""[Agent Thinking Session]
+
+User Request: {base_prompt}
+
+Thinking Process: {thinking}
+
+Code Changes: {files_changed if files_changed else "General snapshot"}"""
+        else:
+            prompt = base_prompt
+
+        LOGGER.info(f"Using enhanced prompt with thinking: {len(thinking) > 0}")
 
         # Step 1: Check if Memov is initialized
         status_result = run_mem_command(["status"], project_path)
@@ -353,6 +404,7 @@ def auto_mem_snap(files_changed: str = "", project_path: str = None) -> str:
 
         # Clear context after successful operation
         _user_context["current_prompt"] = None
+        _user_context["thinking_process"] = ""  # Clear thinking process after snap
 
         # Build detailed result message
         result_parts = ["✅ Auto operation completed successfully"]
@@ -644,7 +696,10 @@ def get_user_context() -> str:
     if not _user_context["current_prompt"]:
         return "📭 No user context currently set"
 
-    return f"📋 Current user context:\n🗣️ Prompt: {_user_context['current_prompt']}\n⏰ Set at: {time.ctime(_user_context['timestamp'])}\n🔑 Session: {_user_context['session_id']}\n📁 Working directory: {_user_context['working_directory'] or 'Not set'}"
+    thinking = _user_context.get("thinking_process", "")
+    thinking_info = f"\n🧠 Thinking: {thinking}" if thinking else "\n🧠 Thinking: None recorded"
+
+    return f"📋 Current user context:\n🗣️ Prompt: {_user_context['current_prompt']}\n⏰ Set at: {time.ctime(_user_context['timestamp'])}\n🔑 Session: {_user_context['session_id']}\n📁 Working directory: {_user_context['working_directory'] or 'Not set'}{thinking_info}"
 
 
 @mcp.tool()
