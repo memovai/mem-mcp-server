@@ -17,11 +17,13 @@ import os
 import re
 import subprocess
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 from mcp.server.fastmcp import FastMCP
 
+from ..utils.agent_capture import capture_change, capture_plan, get_agent_capture
 from ..utils.summarizer import create_summary_from_commits
 
 LOGGER = logging.getLogger(__name__)
@@ -144,6 +146,13 @@ def set_user_context(
         LOGGER.info(
             f"set_user_context called with: user_prompt='{user_prompt}', session_id='{session_id}'"
         )
+
+        # Capture this user request as a plan
+        try:
+            plan_result = capture_plan("user_request", user_prompt, project_path)
+            LOGGER.info(f"Auto-captured user request: {plan_result}")
+        except Exception as e:
+            LOGGER.error(f"Failed to auto-capture user request: {e}")
         global _user_context
         _user_context["current_prompt"] = user_prompt
         _user_context["timestamp"] = time.time()
@@ -350,6 +359,23 @@ def auto_mem_snap(files_changed: str = "", project_path: str = None) -> str:
                 LOGGER.info(f"General snapshot created: {snap_result}")
                 if not snap_result["success"]:
                     return f"❌ Failed to create snapshot: {snap_result['error']}"
+
+        # Capture code changes
+        try:
+            if tracked_files:
+                for file in tracked_files:
+                    change_result = capture_change(
+                        "create", file, f"Tracked new file: {prompt[:100]}", project_path
+                    )
+                    LOGGER.info(f"Auto-captured file creation: {change_result}")
+            if modified_files:
+                for file in modified_files:
+                    change_result = capture_change(
+                        "modify", file, f"Modified file: {prompt[:100]}", project_path
+                    )
+                    LOGGER.info(f"Auto-captured file modification: {change_result}")
+        except Exception as e:
+            LOGGER.error(f"Failed to auto-capture code changes: {e}")
 
         # Clear context after successful operation
         _user_context["current_prompt"] = None
@@ -802,6 +828,79 @@ def share(project_path: str = None) -> str:
 
     except Exception as e:
         error_msg = f"❌ Error creating share summary: {str(e)}"
+        LOGGER.error(error_msg, exc_info=True)
+        return error_msg
+
+
+# Agent Capture Tools - Using mem commands to store plans and changes
+
+
+@mcp.tool()
+def record_agent_plan(plan_type: str, content: str, project_path: str = None) -> str:
+    """
+    Capture an agent auto-plan or thinking step using mem snap.
+
+    **Use this tool to record:**
+    - Todo lists and planning steps
+    - Strategic decisions and analysis
+    - Thinking processes and reasoning
+
+    Args:
+        plan_type: Type of plan ('todo', 'thinking', 'strategy', 'analysis', 'decision')
+        content: The actual plan or thinking content
+        project_path: Path to the project directory (default: user's current working directory)
+
+    Returns:
+        Result message from mem command
+    """
+    result = capture_plan(plan_type, content, project_path)
+    LOGGER.info(f"record_agent_plan result: {result}")
+    return result
+
+
+@mcp.tool()
+def record_code_change(
+    change_type: str, file_path: str, description: str = None, project_path: str = None
+) -> str:
+    """
+    Capture a code change using appropriate mem command.
+
+    **Use this tool to record:**
+    - File creation, modification, or deletion
+    - Code refactoring and restructuring
+    - Configuration changes
+
+    Args:
+        change_type: Type of change ('create', 'modify', 'delete', 'rename')
+        file_path: Path to the file being changed
+        description: Optional description of what changed
+        project_path: Path to the project directory (default: user's current working directory)
+
+    Returns:
+        Result message from mem command
+    """
+    result = capture_change(change_type, file_path, description, project_path)
+    LOGGER.info(f"record_code_change result: {result}")
+    return result
+
+
+@mcp.tool()
+def view_capture_history(project_path: str = None) -> str:
+    """
+    View recent capture history from mem.
+
+    Args:
+        project_path: Path to the project directory (default: user's current working directory)
+
+    Returns:
+        Recent history from mem command
+    """
+    try:
+        capture = get_agent_capture(project_path)
+        return capture.get_recent_history(project_path)
+
+    except Exception as e:
+        error_msg = f"❌ Error getting capture history: {str(e)}"
         LOGGER.error(error_msg, exc_info=True)
         return error_msg
 
